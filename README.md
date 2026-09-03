@@ -4,6 +4,7 @@
 
 **开源，个人及非商业使用免费。**
 
+
 ![Format Agent Workbench 首页](docs/images/workbench-home.png)
 
 Format Agent Workbench 面向需要反复整理 Word 格式的人：上传格式要求或排版模板，再上传待处理文档，工作台会识别标题层级、字体字号、段落间距与页面设置，并交付排版后的 DOCX、修订模式 DOCX 和修改对照报告。
@@ -14,7 +15,6 @@ Format Agent Workbench 面向需要反复整理 Word 格式的人：上传格式
 
 ### Windows：双击启动
 
-1. 在 GitHub 的 **Releases** 页面下载 `format-agent-workbench-windows.zip` 并解压。
 2. 双击 `启动工作台.bat`。首次启动会在当前目录创建独立的 `.venv` 并安装依赖。
 3. 浏览器打开后，先开启“载入演示任务”，不用填写 API Key 即可体验完整交互。
 
