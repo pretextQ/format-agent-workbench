@@ -223,7 +223,7 @@ def main():
             "stylemap_path": base + "_stylemap.json",
             "preflight_path": base + "_preflight.json",
             "issues_path": base + "_issues.json",
-        })
+        }, template_path=args.template)
         result = Agent(on_event=print_event).run(**kwargs)
     except PreflightBlockedError as exc:
         write_json_atomic(base + "_preflight.json", exc.report)

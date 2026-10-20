@@ -12,6 +12,7 @@ from core.extract import extract_paragraphs
 from core.safe_output import (
     AtomicOutputSet,
     IntegrityViolationError,
+    cleanup_temps,
     validate_output_paths,
 )
 from core.schema import validate_spec
@@ -52,7 +53,7 @@ class Agent:
             "report_docx_path": report_docx_path,
             "tracked_path": tracked_path,
         }
-        validate_output_paths(target_path, final_paths)
+        validate_output_paths(target_path, final_paths, template_path=template_path)
         if os.path.splitext(out_path)[1].lower() != ".docx":
             raise ValueError("输出必须使用 .docx 扩展名；旧格式只作为输入转换源。")
 
@@ -269,9 +270,6 @@ class Agent:
         # ④.5 文本一致性校验：排版只许改格式，正文一个字都不能动
         from core.text_integrity import check_text_integrity
         allowed_additions = []
-        if ((spec.get("toc") or {}).get("enabled")
-                and not (spec.get("structure") or {}).get("enabled")):
-            allowed_additions = ["目录", "（在 Word 中右键此处选择「更新域」生成目录）"]
         # 手工编号被自动编号替换而剥掉的前缀属于预期内的文字变化
         expected_prefixes = []
         changed_idxs = {c["idx"] for c in changelog
@@ -340,6 +338,7 @@ class Agent:
         # 注意：自检是加分项，失败（如模型不支持图片）不能拖垮已完成的排版结果。
         issues, applied = [], []
         if verify:
+            repair_transaction = None
             try:
                 self._emit("视觉自检", "正在把排版结果渲染成图，交给视觉模型对照规范质检 ...")
                 from core.verify_visual import apply_fixes, verify_visual
@@ -356,43 +355,54 @@ class Agent:
                                f"发现 {len(failed)} 项不符："
                                + "、".join(f"{i['role']}.{i['field']}" for i in failed),
                                status="warn", data=issues)
-                    spec, applied = apply_fixes(spec, failed)
-                    if applied:
+                    repaired_spec, repaired_fixes = apply_fixes(spec, failed)
+                    if repaired_fixes:
                         self._emit("视觉自检",
-                                   f"已定向修复 {len(applied)} 项，正在重排 ...", status="warn")
-                        changelog = apply_format(
-                            target_path, spec, rolemap, candidate_out,
+                                   f"已定向修复 {len(repaired_fixes)} 项，正在重排 ...", status="warn")
+                        # 修复不能覆盖已验收的候选稿；整组产物成功后才切换。
+                        repair_transaction = AtomicOutputSet(final_paths)
+                        repair_out = repair_transaction.temp("out_path")
+                        repaired_changelog = apply_format(
+                            target_path, repaired_spec, rolemap, repair_out,
                             template_path=template_path,
                             allow_risky_structure=allow_risky_structure)
-                        write_report(changelog, spec, candidate_report)
+                        write_report(repaired_changelog, repaired_spec,
+                                     repair_transaction.temp("report_path"))
                         from core.report_docx import build_report_docx
-                        build_report_docx(changelog, spec, candidate_report_docx)
+                        build_report_docx(repaired_changelog, repaired_spec,
+                                          repair_transaction.temp("report_docx_path"))
                         apply_format(
-                            target_path, spec, rolemap, candidate_tracked, track=True,
+                            target_path, repaired_spec, rolemap,
+                            repair_transaction.temp("tracked_path"), track=True,
                             template_path=template_path,
                             allow_risky_structure=allow_risky_structure)
-                        integrity = check_text_integrity(
-                            target_path, candidate_out,
+                        repaired_integrity = check_text_integrity(
+                            target_path, repair_out,
                             allowed_additions=allowed_additions,
                             expected_stripped_prefixes=expected_prefixes,
                             allowed_story_changes=allowed_story_changes)
                         self._emit("视觉自检", "修复后重排完成"
-                                   + ("，文本一致性校验通过" if integrity["ok"]
+                                   + ("，文本一致性校验通过" if repaired_integrity["ok"]
                                       else "，但文本一致性校验发现差异，请人工核对"),
-                                   status="ok" if integrity["ok"] else "err")
-                        if not integrity["ok"]:
-                            raise IntegrityViolationError(integrity)
+                                   status="ok" if repaired_integrity["ok"] else "err")
+                        if not repaired_integrity["ok"]:
+                            raise IntegrityViolationError(repaired_integrity)
+                        repaired_field_refresh = None
                         if refresh_fields:
                             try:
                                 from core.field_refresh import refresh_fields_word
-                                field_refresh = refresh_fields_word(candidate_out)
+                                repaired_field_refresh = refresh_fields_word(repair_out)
                                 self._emit(
                                     "刷新域", "修复后已重新刷新 Word 域",
-                                    status="ok", data=field_refresh)
+                                    status="ok", data=repaired_field_refresh)
                             except RuntimeError as exc:
                                 self._emit(
                                     "刷新域", f"修复后字段未能预刷新：{exc}",
                                     status="warn")
+                        transaction = repair_transaction
+                        spec, applied = repaired_spec, repaired_fixes
+                        changelog, integrity = repaired_changelog, repaired_integrity
+                        field_refresh = repaired_field_refresh
                     else:
                         self._emit("视觉自检",
                                    "这些问题无法安全自动修复，已保留在问题清单中供人工处理",
@@ -421,6 +431,9 @@ class Agent:
                     f"自检未完成（{detail}）。候选排版稿仍将按结构校验结果提交，"
                     "本次不会被误报为“0 项全部通过”",
                     status="err")
+            finally:
+                if repair_transaction is not None and repair_transaction is not transaction:
+                    cleanup_temps(repair_transaction.temp_paths.values())
 
         transaction.commit(main_key="out_path")
         self._emit("完成", "全部流程结束", status="ok")

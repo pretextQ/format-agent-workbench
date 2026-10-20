@@ -845,6 +845,9 @@ def apply_format(docx_path, spec, rolemap, out_path, track=False,
             "text": "页眉页脚/表格/目录/多栏（页面级）",
             "changed_fields": extra_changes,
             "fallback_to_target_body": False,
+            "allowed_additions": (
+                ["目录", "（在 Word 中右键此处选择「更新域」生成目录）"]
+                if "toc_inserted" in extra_changes else []),
         })
 
     # ---- 论文结构级：安全重建封面/前置页/目录/正文/参考文献 ----

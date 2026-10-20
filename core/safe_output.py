@@ -25,14 +25,17 @@ def _normalized(path):
     return os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(path))))
 
 
-def validate_output_paths(target_path, output_paths):
-    """禁止覆盖源稿、非 DOCX 主稿，以及多个产物互相覆盖。"""
+def validate_output_paths(target_path, output_paths, template_path=None):
+    """禁止覆盖源稿、参考模板，以及多个产物互相覆盖。"""
     target = _normalized(target_path)
+    template = _normalized(template_path) if template_path else None
     normalized = []
     for label, path in output_paths.items():
         value = _normalized(path)
         if value == target:
             raise UnsafeOutputPathError(f"{label} 不能与源文档使用同一路径")
+        if value == template:
+            raise UnsafeOutputPathError(f"{label} 不能与参考模板使用同一路径")
         normalized.append((label, value))
     seen = {}
     for label, value in normalized:
