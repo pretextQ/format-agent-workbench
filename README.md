@@ -4,6 +4,7 @@
 
 **开源，个人及非商业使用免费。**
 
+本项目从源码在本机运行，不提供 Windows 便携包。
 
 ![Format Agent Workbench 首页](docs/images/workbench-home.png)
 
@@ -76,12 +77,6 @@ Temperature 默认使用“自动兼容”，即请求中不发送这个字段�
 | --- | --- |
 | ![排版前](docs/images/before.png) | ![排版后](docs/images/after.png) |
 
-## Workbench 与 Skill 的区别
-
-- **Workbench**：适合希望直接打开界面、上传文件并下载结果的用户。
-
-两者解决的是同一类问题，但入口不同。使用本仓库的图形界面时，按上述步骤从源码启动即可。
-
 ## 支持范围与边界
 
 - 最稳定的输入与输出格式是 DOCX；输出统一为 DOCX。
@@ -123,6 +118,4 @@ pytest tests/ -q
 ## 许可证
 
 本项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE)：源代码公开，个人学习、研究与其他非商业用途免费；商业使用需要另行取得授权。第三方依赖仍遵循其各自许可证。
-
-## 项目沿革
 
