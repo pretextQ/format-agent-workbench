@@ -8,7 +8,6 @@ from core import runtime
 
 
 def test_source_paths_and_worker_commands(monkeypatch, tmp_path):
-    monkeypatch.delattr(runtime.sys, "frozen", raising=False)
     monkeypatch.delenv("FORMAT_AGENT_DATA_DIR", raising=False)
     root = Path(__file__).resolve().parents[1]
 
@@ -20,22 +19,6 @@ def test_source_paths_and_worker_commands(monkeypatch, tmp_path):
     assert conversion[0] == sys.executable
     assert Path(conversion[1]) == root / "core" / "com_conversion_worker.py"
     assert refresh[2] == "--worker"
-
-
-def test_frozen_paths_and_worker_commands(monkeypatch, tmp_path):
-    bundle = tmp_path / "bundle"
-    executable = tmp_path / "portable" / "Format Agent.exe"
-    monkeypatch.setattr(runtime.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(runtime.sys, "_MEIPASS", str(bundle), raising=False)
-    monkeypatch.setattr(runtime.sys, "executable", str(executable))
-    monkeypatch.delenv("FORMAT_AGENT_DATA_DIR", raising=False)
-
-    assert runtime.resource_root() == bundle.resolve()
-    assert runtime.data_root() == executable.parent.resolve()
-    assert runtime.settings_path() == executable.parent.resolve() / ".env"
-    assert runtime.worker_command("com-pdf", "a.docx", "a.pdf", "Word", "Word") == [
-        str(executable), "--worker", "com-pdf", "a.docx", "a.pdf", "Word", "Word"
-    ]
 
 
 def test_data_directory_override(monkeypatch, tmp_path):

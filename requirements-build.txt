@@ -1,2 +1,0 @@
-pyinstaller>=6.18,<7
-pytest>=8,<9

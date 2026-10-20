@@ -6,3 +6,6 @@ textColor = "#171716"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+address = "127.0.0.1"
