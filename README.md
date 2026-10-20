@@ -4,7 +4,7 @@
 
 **开源，个人及非商业使用免费。**
 
-本项目从源码在本机运行，不提供 Windows 便携包。
+本项目仅面向 Windows 本机使用，从源码运行，不提供 Windows 便携包。
 
 ![Format Agent Workbench 首页](docs/images/workbench-home.png)
 
@@ -24,18 +24,6 @@ Format Agent Workbench 面向需要反复整理 Word 格式的人：上传格式
 以后仍然双击 `启动工作台.bat`；使用时请保留启动窗口，需要停止时按 Ctrl+C。模型设置保存在项目目录的 `.env`，历史产物保存在 `out/history`。
 
 要求：64 位 Windows 10/11。为获得最稳定的 DOC/DOCX 转换与预览效果，建议安装 Microsoft Word；WPS 也可用于部分格式转换。没有 Word/WPS 时，DOCX 的基础排版仍可运行，但部分预览、旧格式转换与域刷新会受限。
-
-### macOS / Linux：命令行安装
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m streamlit run app.py --server.address=127.0.0.1
-```
-
-推荐安装 LibreOffice，用于文档转换和页面渲染。浏览器默认访问 `http://127.0.0.1:8501`。
 
 ## 使用自己的文档
 
@@ -89,23 +77,19 @@ Temperature 默认使用“自动兼容”，即请求中不发送这个字段�
 
 图形界面之外，也可以直接调用排版 Agent：
 
-```bash
-python main.py \
-  --spec requirements.txt \
-  --target draft.docx \
-  --out output/formatted.docx \
-  --verify
+```powershell
+python main.py --spec assets/spec.txt --target draft.docx --out output/formatted.docx --verify
 ```
 
 查看全部参数：
 
-```bash
+```powershell
 python main.py --help
 ```
 
 ## 开发与验证
 
-```bash
+```powershell
 python -m pip install -r requirements.txt
 python -m pip install pytest
 pytest tests/ -q
