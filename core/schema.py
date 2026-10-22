@@ -35,6 +35,9 @@ ROLE_REQUIRED_FIELDS = ["font_eastasia", "size_pt", "alignment"]
 ALIGNMENTS = {"left", "center", "right", "justify"}
 
 SIZE_PT_RANGE = (8, 72)
+# multiple 行距的 pt 是倍数（1.5 = 1.5 倍），不是磅值；限定合理区间，
+# 防止把 28 磅误当成 28 倍写进规范。exact 行距仍按磅处理。
+LINE_SPACING_MULTIPLE_RANGE = (1.0, 5.0)
 MARGIN_MM_RANGE = (5, 50)
 INDENT_CHARS_RANGE = (0, 8)
 NUMBERING_SUFFIXES = {"tab", "space", "nothing"}
@@ -685,6 +688,11 @@ def validate_spec(spec):
             if ls is not None:
                 if not isinstance(ls, dict) or ls.get("type") not in ("exact", "multiple") or not _is_num(ls.get("pt")):
                     errors.append(f'roles.{role}.line_spacing 非法：必须是 {{"type": "exact"|"multiple", "pt": 数值}}')
+                elif ls["type"] == "multiple" and not (
+                        LINE_SPACING_MULTIPLE_RANGE[0] <= ls["pt"] <= LINE_SPACING_MULTIPLE_RANGE[1]):
+                    errors.append(
+                        f"roles.{role}.line_spacing.pt={ls['pt']!r} 非法：multiple 行距必须是 "
+                        f"{LINE_SPACING_MULTIPLE_RANGE[0]}~{LINE_SPACING_MULTIPLE_RANGE[1]} 倍，不是磅值")
             v = rule.get("outline_level")
             if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not (0 <= v <= 8)):
                 errors.append(f"roles.{role}.outline_level={v!r} 非法：必须是 0~8 的整数")
@@ -800,6 +808,11 @@ def _validate_note_rule(errors, path, rule):
         errors.append(
             f"{path}.line_spacing 必须是 "
             '{"type":"exact"|"multiple","pt":数值}')
+    elif spacing is not None and spacing["type"] == "multiple" and not (
+            LINE_SPACING_MULTIPLE_RANGE[0] <= spacing["pt"] <= LINE_SPACING_MULTIPLE_RANGE[1]):
+        errors.append(
+            f"{path}.line_spacing.pt={spacing['pt']!r} 非法：multiple 行距必须是 "
+            f"{LINE_SPACING_MULTIPLE_RANGE[0]}~{LINE_SPACING_MULTIPLE_RANGE[1]} 倍，不是磅值")
 
 
 def _is_num(v):

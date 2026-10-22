@@ -6,9 +6,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.llm import LLMClient, LLMError
+from core.schema import SpecValidationError, validate_spec
 from core.verify_visual import (
     VisualInconclusiveError,
     VisualResponseError,
@@ -126,3 +129,72 @@ else:
     raise AssertionError("空图片列表不得降级成纯文本请求")
 
 print("视觉自检测试通过：JSON 对象、空结果、布尔值、分批与修正方向均正常")
+
+
+# ---- T3 / R-03：倍数行距不得被当成磅值自动修复 ----
+
+def _line_spacing_spec(line_spacing):
+    return {
+        "roles": {
+            "body": {
+                "font_eastasia": "仿宋_GB2312",
+                "size_pt": 16,
+                "alignment": "justify",
+                "line_spacing": dict(line_spacing),
+            }
+        }
+    }
+
+
+def _line_spacing_issue(expected, observed="与实际不符"):
+    return {
+        "role": "body",
+        "field": "line_spacing.pt",
+        "pass": False,
+        "observed": observed,
+        "expected": expected,
+    }
+
+
+def test_multiple_line_spacing_is_fixed_as_multiplier():
+    """multiple 的 pt 是倍数：1.5 倍必须可修，不能被 8~72 磅区间误拒。"""
+    spec = _line_spacing_spec({"type": "multiple", "pt": 1.0})
+
+    fixed, applied = apply_fixes(spec, [_line_spacing_issue("1.5 倍")])
+
+    assert applied, "multiple 行距 1.5 倍应当被接受为可修复项"
+    assert fixed["roles"]["body"]["line_spacing"] == {
+        "type": "multiple", "pt": 1.5}
+    # 原 spec 不被就地修改
+    assert spec["roles"]["body"]["line_spacing"] == {"type": "multiple", "pt": 1.0}
+
+
+def test_multiple_line_spacing_rejects_point_values():
+    """multiple 规格下 expected=28 是磅值误报，必须拒绝，绝不写成 28 倍。"""
+    spec = _line_spacing_spec({"type": "multiple", "pt": 1.5})
+
+    fixed, applied = apply_fixes(spec, [_line_spacing_issue("28 磅")])
+
+    assert applied == []
+    assert fixed["roles"]["body"]["line_spacing"] == {"type": "multiple", "pt": 1.5}
+
+
+def test_exact_line_spacing_is_still_fixed_as_points():
+    """exact 的 pt 是磅值：28 磅仍按既有行为修复。"""
+    spec = _line_spacing_spec({"type": "exact", "pt": 22})
+
+    fixed, applied = apply_fixes(spec, [_line_spacing_issue("28 磅")])
+
+    assert applied
+    assert fixed["roles"]["body"]["line_spacing"] == {"type": "exact", "pt": 28}
+
+
+def test_schema_accepts_reasonable_multiple_line_spacing():
+    for value in (1.0, 1.5, 2.0):
+        validate_spec(_line_spacing_spec({"type": "multiple", "pt": value}))
+
+
+def test_schema_rejects_absurd_multiple_line_spacing():
+    for value in (0.5, 28):
+        with pytest.raises(SpecValidationError):
+            validate_spec(_line_spacing_spec({"type": "multiple", "pt": value}))

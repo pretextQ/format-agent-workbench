@@ -44,12 +44,15 @@ class VisualResponseError(VisualVerificationError):
 class VisualInconclusiveError(VisualVerificationError):
     """模型明确表示无法完成质检。"""
 
-# 可自动修复的数值字段：issue.field -> (spec 内的取值路径, 合法范围)
+# 可自动修复的数值字段：issue.field -> 合法范围
 _FIXABLE_NUMERIC = {
     "size_pt": (8, 72),
-    "line_spacing.pt": (8, 72),
     "first_line_indent_chars": (0, 8),
 }
+# 行距按 type 区分语义：exact 的 pt 是磅值，multiple 的 pt 是倍数，
+# 不能共用 8~72 —— 否则 1.5 倍会被误拒、28 会被写成 28 倍。
+_LINE_SPACING_PT_RANGE = (8, 72)
+_LINE_SPACING_MULTIPLE_RANGE = (1.0, 5.0)
 _FIXABLE_ALIGN = {"left", "center", "right", "justify"}
 
 
@@ -221,23 +224,33 @@ def apply_fixes(spec, issues):
         rule = (fixed.get("roles") or {}).get(role)
         if rule is None:
             continue
-        if field in _FIXABLE_NUMERIC:
-            lo, hi = _FIXABLE_NUMERIC[field]
+        if field == "line_spacing.pt":
+            ls = rule.get("line_spacing")
+            if not isinstance(ls, dict):
+                continue
             # 只能向规范的 expected 方向修正；绝不得把观测到的
             # 错误值 observed 固化回 FormatSpec。
             v = _parse_number(it["expected"])
+            if v is None:
+                continue
+            if ls.get("type") == "multiple":
+                lo, hi = _LINE_SPACING_MULTIPLE_RANGE
+            elif ls.get("type") == "exact":
+                lo, hi = _LINE_SPACING_PT_RANGE
+            else:
+                continue
+            if not (lo <= v <= hi):
+                continue
+            ls["pt"] = v
+            applied.append(it)
+        elif field in _FIXABLE_NUMERIC:
+            lo, hi = _FIXABLE_NUMERIC[field]
+            v = _parse_number(it["expected"])
             if v is None or not (lo <= v <= hi):
                 continue
-            if field == "line_spacing.pt":
-                ls = rule.get("line_spacing")
-                if isinstance(ls, dict):
-                    ls["pt"] = v
-                else:
-                    continue
-            else:
-                if rule.get(field) == v:
-                    continue
-                rule[field] = v
+            if rule.get(field) == v:
+                continue
+            rule[field] = v
             applied.append(it)
         elif field == "alignment" and it["expected"] in _FIXABLE_ALIGN:
             if rule.get("alignment") == it["expected"]:
