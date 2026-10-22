@@ -11,6 +11,33 @@ from docx.oxml.ns import qn
 
 DEFAULT_AUTHOR = "FormatAgent"
 
+# 排版过程（label_prefix 等）拆分出的新 w:r 不在 snapshot_paragraph 的
+# 快照里。style_set._split_plain_run_at 通过 register_split_run 把新 run
+# 关联到来源 run——仅 Python 侧属性，**绝不写入文档 XML**；
+# mark_paragraph_revision 据此取来源 run 的旧快照，使「拒绝全部修订」不
+# 丢失拆分片段上的原直接格式。
+#
+# 注意：lxml 的 Python 代理在无人引用时会被回收，代理上的自定义属性也随之
+# 消失。因此来源 run 上还要挂一个派生列表持有新 run 的代理，让两边在
+# 快照/排版/修订整个生命周期内保持同一代理身份（快照字典的键本来就在
+# 为来源 run 代理续命）。
+SOURCE_RUN_ATTR = "_faw_source_run"
+_SPLIT_CLONES_ATTR = "_faw_split_clones"
+
+
+def register_split_run(new_run_element, source_run_element):
+    """登记一次 run 拆分：新 run 指回来源 run，并由来源 run 持有其代理。
+
+    纯 Python 侧关联，不产生任何 XML 内容；track=False 时来源代理随
+    快照/文档释放，登记项一并回收，不形成长期驻留。
+    """
+    clones = getattr(source_run_element, _SPLIT_CLONES_ATTR, None)
+    if clones is None:
+        clones = []
+        setattr(source_run_element, _SPLIT_CLONES_ATTR, clones)
+    clones.append(new_run_element)
+    setattr(new_run_element, SOURCE_RUN_ATTR, source_run_element)
+
 
 def snapshot_paragraph(paragraph):
     """记录修改前的段落属性与每个 run 的字符属性（深拷贝）。
@@ -34,6 +61,23 @@ def _set_change_attrs(el, rev_id, author, date):
     el.set(qn("w:id"), str(rev_id))
     el.set(qn("w:author"), author)
     el.set(qn("w:date"), date)
+
+
+def _old_rpr_for(run_element, old_rprs):
+    """按 run 元素取旧 rPr 快照；拆分出的新 run 沿来源关联回溯到原 run。
+
+    原 run 本身没有 rPr 时快照为 None（写空旧状态），照实返回；
+    查无来源的全新 run 也返回 None——绝不借用相邻 run 的旧属性，
+    来源链只沿 SOURCE_RUN_ATTR 单向回溯，不会跨 run 错配。
+    """
+    seen = set()
+    current = run_element
+    while current is not None and current not in seen:
+        if current in old_rprs:
+            return old_rprs[current]
+        seen.add(current)
+        current = getattr(current, SOURCE_RUN_ATTR, None)
+    return None
 
 
 def mark_paragraph_revision(paragraph, snapshot, author=DEFAULT_AUTHOR,
@@ -62,10 +106,14 @@ def mark_paragraph_revision(paragraph, snapshot, author=DEFAULT_AUTHOR,
         rev_id += 1
 
     for run in paragraph.runs:
-        # 按 run 元素身份取旧快照；label_prefix 拆分出的新 run 没有旧状态，
-        # 按空 rPr 记录，绝不把相邻原 run 的旧属性错配过来。
-        old_rpr = old_rprs.get(run._element)
+        # 按 run 元素身份取旧快照，查不到时沿拆分来源关联回溯到原 run
+        #（继承其旧格式，拒绝修订不丢原直接格式）；彻底查不到的全新 run
+        # 按空 rPr 记录，绝不把相邻 run 的旧属性错配过来。
+        old_rpr = _old_rpr_for(run._element, old_rprs)
         if old_rpr is not None:
+            # 同一份快照会被来源 run 与其拆分片段共享：先深拷贝再挂进
+            # 修订记录，避免 lxml 把字典里的快照节点整体挪走。
+            old_rpr = copy.deepcopy(old_rpr)
             for nested in old_rpr.findall(qn("w:rPrChange")):
                 old_rpr.remove(nested)
         rpr = run._element.find(qn("w:rPr"))

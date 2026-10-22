@@ -21,6 +21,7 @@ from core.numbering import (
     ensure_numbering_groups,
     set_style_numbering,
 )
+from core.track_changes import register_split_run
 
 
 ROLE_STYLE_NAMES = {
@@ -785,7 +786,11 @@ def _strip_manual_number_prefix(paragraph, role):
 
 
 def _split_plain_run_at(paragraph, offset):
-    """在段落字符偏移处拆分纯文本 run；遇到域、换行、绘图等复杂 run 则放弃。"""
+    """在段落字符偏移处拆分纯文本 run；遇到域、换行、绘图等复杂 run 则放弃。
+
+    拆出的新 run 会经 register_split_run 关联来源 run——仅 Python 侧
+    属性，不写入文档 XML；修订稿据此让新片段继承来源 run 的旧格式快照。
+    """
     cursor = 0
     for run in list(paragraph.runs):
         text = run.text
@@ -796,6 +801,8 @@ def _split_plain_run_at(paragraph, offset):
                 return False
             clone = deepcopy(run._element)
             run._element.addnext(clone)
+            # 纯 Python 侧来源关联 + 代理续命，绝不落盘到 XML
+            register_split_run(clone, run._element)
             suffix = Run(clone, paragraph)
             cut = offset - cursor
             run.text = text[:cut]

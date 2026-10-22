@@ -9,10 +9,12 @@
   会把旧属性错配给新插入的 run，甚至漏掉后面的原 run。
 
 本文件只断言「存在修订标记 + 旧快照完整且正确对应」这些结构性事实。
-“Word/WPS 拒绝全部修订后格式回到原样”属人工验收，未执行时记录 not_run。
+“Word/WPS 拒绝全部修订后格式回到原样”属人工验收，未执行时记录 not_run；
+R2-1 起另有程序化模拟「拒绝全部修订」的结构断言（不代表真机行为）。
 """
 
 import sys
+import zipfile
 from pathlib import Path
 
 from docx import Document
@@ -51,6 +53,38 @@ def _old_state(change, tag):
     state = change.find(qn(tag))
     assert state is not None, "修订记录必须携带完整的旧状态快照"
     return state
+
+
+def _reject_all_revisions(paragraph):
+    """程序化模拟 Word/WPS「拒绝全部修订」：按修订记录携带的旧快照回写
+    pPr/rPr，并移除修订标记本身。本管线只有属性级修订，因此只做属性级
+    回写；这是结构模拟，不等价于真机行为（真机验收单独记 not_run）。
+    """
+    p = paragraph._p
+    ppr = p.pPr
+    if ppr is not None:
+        change = ppr.find(qn("w:pPrChange"))
+        if change is not None:
+            old_ppr = change.find(qn("w:pPr"))
+            index = list(p).index(ppr)
+            p.remove(ppr)
+            # 旧状态为空 pPr = 修改前没有 pPr，直接移除
+            if old_ppr is not None and len(old_ppr):
+                p.insert(index, old_ppr)
+    for run in paragraph.runs:
+        el = run._element
+        rpr = el.find(qn("w:rPr"))
+        if rpr is None:
+            continue
+        change = rpr.find(qn("w:rPrChange"))
+        if change is None:
+            continue
+        old_rpr = change.find(qn("w:rPr"))
+        index = list(el).index(rpr)
+        el.remove(rpr)
+        # 旧状态为空 rPr = 修改前没有直接字符格式，不回写任何属性
+        if old_rpr is not None and len(old_rpr):
+            el.insert(index, old_rpr)
 
 
 def test_plain_paragraph_and_run_get_revision_markers(tmp_path):
@@ -151,10 +185,76 @@ def test_label_prefix_split_keeps_revision_mapping_by_run_element(tmp_path):
     # 第一个 run 是自己的旧属性（10pt、原本不加粗）
     assert old_states[0].find(qn("w:sz")).get(qn("w:val")) == "20"
     assert old_states[0].find(qn("w:b")) is None
-    # 拆分出的新 run 没有旧状态：空 rPr，不能张冠李戴到第二个原 run
-    assert len(old_states[1]) == 0
+    # 拆分出的新 run 继承**来源 run**的旧快照（同为 10pt、原本不加粗）；
+    # 不是空快照，也不能张冠李戴到第二个原 run（它的旧属性是加粗）
+    assert old_states[1].find(qn("w:sz")).get(qn("w:val")) == "20"
+    assert old_states[1].find(qn("w:b")) is None
     # 第二个原 run 必须对应自己的旧快照（旧实现 zip 错位时会丢失）
     assert old_states[2].find(qn("w:b")) is not None
+    # 来源关联不得跨到第二个原 run：三段快照两两不共享同一旧状态节点
+    assert old_states[0] is not old_states[1]
+    assert old_states[1] is not old_states[2]
+
+
+def test_reject_all_revisions_keeps_direct_format_after_prefix_split(tmp_path):
+    """R2-1 回归：前缀拆分出的 run 片段拒绝修订后仍保留原直接格式。
+
+    源 run 带直接格式（10pt、加粗），label_prefix 把它拆成「摘要：」与
+    「本文研究」两个片段；两段同源，「拒绝全部修订」后必须都回到该源
+    run 的旧直接格式，而不是让拆分片段丢成无格式。
+    """
+    source = tmp_path / "src.docx"
+    tracked = tmp_path / "tracked.docx"
+
+    document = Document()
+    paragraph = document.add_paragraph()
+    run = paragraph.add_run("摘要：本文研究")
+    run.font.size = Pt(10)
+    run.font.bold = True
+    document.save(source)
+
+    apply_format(str(source), LABEL_SPEC, {0: "body"}, str(tracked), track=True)
+
+    # 来源关联只是 Python 侧属性，保存后的 docx 不得出现外来自定义 XML 属性
+    with zipfile.ZipFile(tracked) as package:
+        xml = package.read("word/document.xml").decode("utf-8")
+    assert "_faw_source_run" not in xml
+    assert "_faw_split_clones" not in xml
+
+    paragraph = Document(tracked).paragraphs[0]
+    assert [fragment.text for fragment in paragraph.runs] == ["摘要：", "本文研究"]
+
+    _reject_all_revisions(paragraph)
+    for fragment in paragraph.runs:
+        size = fragment.font.size
+        assert size is not None and size.pt == 10, (
+            f"拒绝修订后 {fragment.text!r} 丢失原字号 10pt")
+        assert fragment.font.bold is True, (
+            f"拒绝修订后 {fragment.text!r} 丢失原加粗")
+
+
+def test_label_prefix_split_without_format_keeps_empty_old_snapshot(tmp_path):
+    """无直接格式的 run 被前缀拆分后，各片段旧快照仍为空（不伪造）。"""
+    source = tmp_path / "src.docx"
+    tracked = tmp_path / "tracked.docx"
+
+    document = Document()
+    document.add_paragraph("摘要：无格式正文")
+    document.save(source)
+
+    apply_format(str(source), LABEL_SPEC, {0: "body"}, str(tracked), track=True)
+
+    paragraph = Document(tracked).paragraphs[0]
+    assert [fragment.text for fragment in paragraph.runs] == ["摘要：", "无格式正文"]
+    for fragment in paragraph.runs:
+        rpr = fragment._element.find(qn("w:rPr"))
+        assert rpr is not None
+        change = _change(rpr, "w:rPrChange")
+        assert change is not None, f"run {fragment.text!r} 缺少 w:rPrChange"
+        assert rpr[-1].tag == qn("w:rPrChange")
+        old_rpr = _old_state(change, "w:rPr")
+        assert len(old_rpr) == 0, (
+            f"无格式源 run 拆分出的 {fragment.text!r} 不得伪造旧快照")
 
 
 def test_clean_output_has_no_revision_markers(tmp_path):
