@@ -383,7 +383,36 @@ class Agent:
                        status="err", data=integrity)
             raise IntegrityViolationError(integrity)
 
+        # ④.6 域刷新（Word 改写目录/页码/页眉）之后必须对刷新后的候选稿
+        # 重新做文本一致性复检：刷新可能改字，旧实现校验完直接提交，改字
+        # 永远不会被发现（审计 R-11/B5）。复检不过 = 硬失败，绝不发布。
+        # 注意：IntegrityViolationError 是 RuntimeError 子类，复检调用必须
+        # 放在刷新的 try/except RuntimeError **之外**，否则会被刷新失败的
+        # 降级分支当作“字段未能预刷新”吞掉。
+        def _recheck_after_refresh(out_file):
+            conclusion = check_text_integrity(
+                target_path, out_file,
+                allowed_additions=allowed_additions,
+                expected_stripped_prefixes=expected_prefixes,
+                allowed_story_changes=allowed_story_changes)
+            if conclusion["ok"]:
+                self._emit(
+                    "刷新域",
+                    "域刷新后文本一致性复检通过：正文与受保护 Story 零改动",
+                    status="ok")
+            else:
+                self._emit(
+                    "刷新域",
+                    f"域刷新后文本一致性复检发现差异：新增 {len(conclusion['added'])} 段、"
+                    f"缺失 {len(conclusion['removed'])} 段、"
+                    f"Story 差异 {len(conclusion.get('story_differences', []))} 类；"
+                    "不发布任何交付物",
+                    status="err", data=conclusion)
+                raise IntegrityViolationError(conclusion)
+            return conclusion
+
         field_refresh = None
+        post_refresh_integrity = None
         if refresh_fields:
             try:
                 from core.field_refresh import refresh_fields_word
@@ -397,6 +426,9 @@ class Agent:
                     "刷新域",
                     f"字段未能预刷新：{exc}；文档将在 Word 打开时自动更新",
                     status="warn")
+            # 无论刷新成功与否都复检：成功改字会被拦截，降级路径若发生
+            # 半写入同样会被拦截（文档未变时复检恒通过）。
+            post_refresh_integrity = _recheck_after_refresh(candidate_out)
 
         # ⑤ 视觉自检（可选，一轮定向修复，不做开放循环）
         # 注意：自检是加分项，失败（如模型不支持图片）不能拖垮已完成的排版结果。
@@ -473,6 +505,10 @@ class Agent:
                                 self._emit(
                                     "刷新域", f"修复后字段未能预刷新：{exc}",
                                     status="warn")
+                            # 修复重排稿刷新后同样必须复检；不通过时抛出的
+                            # IntegrityViolationError 会被下面的同名 except
+                            # 原样上抛（硬失败不发布），不会被视觉自检降级吞掉。
+                            post_refresh_integrity = _recheck_after_refresh(repair_out)
                         transaction = repair_transaction
                         spec, applied = repaired_spec, repaired_fixes
                         changelog, integrity = repaired_changelog, repaired_integrity
@@ -529,6 +565,9 @@ class Agent:
             "issues": issues, "applied_fixes": applied,
             "text_integrity": integrity,
             "field_refresh": field_refresh,
+            # 刷新后复检结论：refresh_fields=False 时为 None；既有字段与
+            # CLI/app 消费方式不受影响。
+            "post_refresh_integrity": post_refresh_integrity,
             "preflight": preflight,
             "input_conversion": _conversion_context,
             "out_path": out_path, "report_path": report_path,

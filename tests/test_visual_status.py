@@ -188,8 +188,11 @@ def test_visual_errors_map_to_status_and_reason(
 def test_result_only_adds_verification_fields(tmp_path, monkeypatch):
     result, _, _ = _run_agent(tmp_path, monkeypatch, False, list)
     assert LEGACY_RESULT_KEYS <= set(result)
+    # 封闭集合守卫：除下列键外 result 不得新增任何字段（R2-2 经 Lead 裁定
+    # 授权纳入 post_refresh_integrity——刷新后复检结论；守卫强度不变）。
     assert set(result) - LEGACY_RESULT_KEYS == {
-        "verification_status", "verification_error"}
+        "verification_status", "verification_error",
+        "post_refresh_integrity"}
 
 
 def test_describe_not_run_never_claims_zero():
