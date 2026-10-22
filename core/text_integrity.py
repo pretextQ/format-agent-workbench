@@ -123,8 +123,12 @@ def check_text_integrity(source_path, out_path,
         out_filtered.append(t)
 
     # 剥掉"手工编号前缀被自动编号替换"的段落差异：
-    # 终稿段落 = 原稿段落去掉前缀，视为等价，两边同时归一
-    prefixes = sorted(expected_stripped_prefixes, key=len, reverse=True)
+    # 终稿段落 = 原稿段落去掉前缀，视为等价，两边同时归一。
+    # 前缀必须逐字匹配（含标点/空格）；只做与本模块一致的空白规范化，
+    # 让段落文本里被压缩过的空格不影响前缀命中，不放宽任何增删判断。
+    prefixes = sorted(
+        {_norm(prefix) for prefix in expected_stripped_prefixes if prefix},
+        key=len, reverse=True)
 
     def strip_known_prefix(t):
         for pre in prefixes:

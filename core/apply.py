@@ -716,7 +716,7 @@ def apply_format(docx_path, spec, rolemap, out_path, track=False,
         if resolved_role is not None:
             rule = roles[resolved_role]
             style = role_styles[resolved_role]
-            changed = apply_named_style(
+            changed, stripped_prefix = apply_named_style(
                 p, style, rule, role=role, cleanup_mode=cleanup_mode,
                 preserved_numbering=preserved_numbering.get(idx))
             fallback_to_target_body = resolved_role != role
@@ -726,7 +726,7 @@ def apply_format(docx_path, spec, rolemap, out_path, track=False,
             # 真实自动编号保留（body 不在清编号集合内），仅清“取消编号”残留。
             body_rule = roles.get("body", {})
             body_style = role_styles.get("body", target_body_style)
-            changed = apply_named_style(
+            changed, stripped_prefix = apply_named_style(
                 p, body_style, body_rule, role="body", cleanup_mode=cleanup_mode,
                 preserved_numbering=preserved_numbering.get(idx))
             style = body_style
@@ -741,6 +741,9 @@ def apply_format(docx_path, spec, rolemap, out_path, track=False,
             "style_name": style.name,
             "text": p.text.strip()[:30],
             "changed_fields": changed,
+            # 实际剥掉的手工编号前缀原文（如 "一、"、"1. "）。文本一致性
+            # 校验只允许这些精确前缀被自动编号取代，不能拿 label 猜。
+            "stripped_prefixes": [stripped_prefix] if stripped_prefix else [],
             "fallback_to_target_body": fallback_to_target_body,
         })
 

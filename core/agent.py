@@ -270,13 +270,10 @@ class Agent:
         # ④.5 文本一致性校验：排版只许改格式，正文一个字都不能动
         from core.text_integrity import check_text_integrity
         allowed_additions = []
-        # 手工编号被自动编号替换而剥掉的前缀属于预期内的文字变化
+        # 手工编号被自动编号替换而剥掉的前缀属于预期内的文字变化。这里只接受
+        # style_set 实际剥掉的完整前缀（经 changelog 原样传回，含标点/空格）；
+        # 不再用 extract 的 manual_number label 猜（"1" ≠ 实际剥掉的 "1. "）。
         expected_prefixes = []
-        changed_idxs = {c["idx"] for c in changelog
-                        if "manual_number_prefix_removed" in c.get("changed_fields", [])}
-        for p in paragraphs:
-            if p["idx"] in changed_idxs and p.get("manual_number"):
-                expected_prefixes.append(str(p["manual_number"]))
         for change in changelog:
             allowed_additions.extend(change.get("allowed_additions") or [])
             expected_prefixes.extend(change.get("stripped_prefixes") or [])

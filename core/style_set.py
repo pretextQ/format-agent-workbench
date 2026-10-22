@@ -749,11 +749,16 @@ _MANUAL_PREFIXES = {
 
 
 def _strip_manual_number_prefix(paragraph, role):
-    """编号样式启用时去掉手工键入的前缀，避免“一、一、标题”。"""
+    """编号样式启用时去掉手工键入的前缀，避免“一、一、标题”。
+
+    返回实际剥掉的**完整前缀**（含标点与空格，如 "一、"、"1. "），
+    调用方据此向文本一致性校验声明预期内的文字差异；未剥离时返回 None。
+    只返回 bool 会把前缀原文丢掉，校验侧只能拿编号 label 猜，造成误判。
+    """
     pattern = _MANUAL_PREFIXES.get(role)
     match = pattern.match(paragraph.text) if pattern is not None else None
     if match is None:
-        return False
+        return None
     prefix = match.group(0)
     for run in paragraph.runs:
         text = run.text
@@ -761,10 +766,10 @@ def _strip_manual_number_prefix(paragraph, role):
         if not text:
             # 若编号前有字段、绘图或制表符，跳过清理，绝不破坏复杂 run。
             if payload:
-                return False
+                return None
             continue
         if not text.startswith(prefix) or any(child.tag != qn("w:t") for child in payload):
-            return False
+            return None
         remaining = len(prefix)
         for text_node in payload:
             value = text_node.text or ""
@@ -775,8 +780,8 @@ def _strip_manual_number_prefix(paragraph, role):
                 text_node.text = value[remaining:]
                 remaining = 0
                 break
-        return remaining == 0
-    return False
+        return prefix if remaining == 0 else None
+    return None
 
 
 def _split_plain_run_at(paragraph, offset):
@@ -843,7 +848,8 @@ def apply_named_style(
     invalid_numbering_removed = (
         clear_invalid_numbering_override(paragraph) if role == "body" else False)
     has_numbering = isinstance(rule.get("numbering"), dict)
-    stripped_prefix = _strip_manual_number_prefix(paragraph, role) if has_numbering else False
+    stripped_prefix = (
+        _strip_manual_number_prefix(paragraph, role) if has_numbering else None)
     remove_numbering = has_numbering or role in {
         "title", "subtitle", "heading_1", "heading_2", "heading_3", "heading_4",
         "abstract_heading", "chapter_heading", "bibliography_heading",
@@ -883,4 +889,6 @@ def apply_named_style(
         )
         if rule.get(field) is not None
     )
-    return fields
+    # 第二个返回值是实际剥掉的手工前缀（无剥离则为 None），供 apply_format
+    # 原样写进 changelog，再由 Agent 传给文本一致性校验。
+    return fields, stripped_prefix
