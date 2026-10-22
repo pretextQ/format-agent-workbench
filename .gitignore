@@ -16,6 +16,7 @@ htmlcov/
 .workbench/
 output/
 out/
+.agent-teams/
 *.log
 *_verify_render/
 *_report.md
