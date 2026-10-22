@@ -13,13 +13,20 @@ DEFAULT_AUTHOR = "FormatAgent"
 
 
 def snapshot_paragraph(paragraph):
-    """记录修改前的段落属性与每个 run 的字符属性（深拷贝）。"""
+    """记录修改前的段落属性与每个 run 的字符属性（深拷贝）。
+
+    返回 (old_ppr, old_rprs)：old_ppr 是修改前 w:pPr 的深拷贝（段落原本
+    没有 pPr 时为 None）；old_rprs 是 {run 元素: w:rPr 深拷贝或 None}，
+    按 **run 元素身份** 索引而不是按位置。排版过程会拆分/插入 run
+    （例如 label_prefix），按位置 zip 会把旧快照错配给新 run，并让后面的
+    原 run 丢掉修订记录。
+    """
     ppr = paragraph._p.pPr
     old_ppr = copy.deepcopy(ppr) if ppr is not None else None
-    old_rprs = []
+    old_rprs = {}
     for run in paragraph.runs:
         rpr = run._element.find(qn("w:rPr"))
-        old_rprs.append(copy.deepcopy(rpr) if rpr is not None else None)
+        old_rprs[run._element] = copy.deepcopy(rpr) if rpr is not None else None
     return old_ppr, old_rprs
 
 
@@ -32,28 +39,35 @@ def _set_change_attrs(el, rev_id, author, date):
 def mark_paragraph_revision(paragraph, snapshot, author=DEFAULT_AUTHOR,
                             rev_id_start=1, date=None):
     """把快照写成修订标记。返回下一个可用的修订 id。
+
     w:pPrChange 作为 pPr 的最后一个子元素；w:rPrChange 同理放在 rPr 末尾。
+    修改前没有直接格式时，旧状态表达为空 w:pPr / 空 w:rPr 快照——这是
+    “拒绝修订后回到无直接格式”的正确记录，不能拿修改后的新格式伪造。
     """
     old_ppr, old_rprs = snapshot
     date = date or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     rev_id = rev_id_start
 
     ppr = paragraph._p.pPr
-    if old_ppr is not None and ppr is not None:
-        # 旧 pPr 里如果本身已有 pPrChange（原文档自带修订），先剥掉，避免嵌套
-        for nested in old_ppr.findall(qn("w:pPrChange")):
-            old_ppr.remove(nested)
+    if ppr is not None:
+        if old_ppr is not None:
+            # 旧 pPr 里如果本身已有 pPrChange（原文档自带修订），先剥掉，避免嵌套
+            for nested in old_ppr.findall(qn("w:pPrChange")):
+                old_ppr.remove(nested)
         change = OxmlElement("w:pPrChange")
         _set_change_attrs(change, rev_id, author, date)
-        change.append(old_ppr)
+        # 原本没有 pPr：旧状态是空 pPr（拒绝修订 = 无直接段落属性）。
+        change.append(old_ppr if old_ppr is not None else OxmlElement("w:pPr"))
         ppr.append(change)  # pPrChange 在 pPr 序列里排最后
         rev_id += 1
 
-    for run, old_rpr in zip(paragraph.runs, old_rprs):
-        if old_rpr is None:
-            continue
-        for nested in old_rpr.findall(qn("w:rPrChange")):
-            old_rpr.remove(nested)
+    for run in paragraph.runs:
+        # 按 run 元素身份取旧快照；label_prefix 拆分出的新 run 没有旧状态，
+        # 按空 rPr 记录，绝不把相邻原 run 的旧属性错配过来。
+        old_rpr = old_rprs.get(run._element)
+        if old_rpr is not None:
+            for nested in old_rpr.findall(qn("w:rPrChange")):
+                old_rpr.remove(nested)
         rpr = run._element.find(qn("w:rPr"))
         if rpr is None:
             # 修改后 rPr 被清空了：补一个只带修订记录的 rPr（rPr 必须是 run 的首子元素）
@@ -61,7 +75,7 @@ def mark_paragraph_revision(paragraph, snapshot, author=DEFAULT_AUTHOR,
             run._element.insert(0, rpr)
         change = OxmlElement("w:rPrChange")
         _set_change_attrs(change, rev_id, author, date)
-        change.append(old_rpr)
+        change.append(old_rpr if old_rpr is not None else OxmlElement("w:rPr"))
         rpr.append(change)  # rPrChange 在 rPr 序列里排最后
         rev_id += 1
     return rev_id
