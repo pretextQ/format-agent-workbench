@@ -15,7 +15,7 @@ from datetime import datetime
 import streamlit as st
 
 from core.agent import Agent
-from core.history import list_runs, save_run
+from core.history import deliverable_entries, list_runs, save_run
 from core.llm import load_dotenv
 from core.llm import LLMClient
 from core.model_settings import (
@@ -1371,7 +1371,50 @@ if run and can_run:
         st.caption("你的原始文档没有被修改。检查事件流中的最后一条信息后，可以修正输入并重试。")
         st.stop()
 
-    # ---------------- 结果 ----------------
+    source_name = "内置示例 messy.docx" if use_demo else target_file.name
+    run_id = save_run(
+        result["out_path"],
+        result["report_path"],
+        {
+            "source_name": source_name,
+            "spec_mode": "内置示例" if use_demo else ("预制规则" if spec_json_file else spec_mode),
+            "issues_count": len(result.get("issues") or []),
+        },
+        tracked_path=result.get("tracked_path"),
+        report_docx_path=result.get("report_docx_path"),
+    )
+
+    # 对比图只渲染一次；rerun 时复用 session_state 中的图片路径，不重复启动渲染器。
+    compare = {"before": [], "after": [], "error": None}
+    try:
+        with st.spinner("正在生成前后对比图……"):
+            from core.render import render_docx_to_png
+
+            compare["after"] = render_docx_to_png(
+                result["out_path"], os.path.join(out_dir, "after")
+            )
+            compare["before"] = (
+                render_docx_to_png(target_path, os.path.join(out_dir, "before"))
+                if target_suffix == ".docx"
+                else []
+            )
+    except Exception as exc:
+        compare["error"] = str(exc)
+
+    # 结果与四件套路径存进 session_state：任何后续 rerun 都能继续渲染和下载。
+    st.session_state["last_result"] = {
+        "result": result,
+        "source_name": source_name,
+        "run_id": run_id,
+        "compare": compare,
+    }
+
+
+# ---------------- 结果（从 session_state 渲染，重跑不清空） ----------------
+_last_result = st.session_state.get("last_result")
+if _last_result:
+    result = _last_result["result"]
+    compare = _last_result.get("compare") or {}
     st.markdown(
         f"""
 <div class="success-banner">
@@ -1400,6 +1443,7 @@ if run and can_run:
                 "formatted.docx",
                 width="stretch",
                 type="primary",
+                on_click="ignore",
             )
         with open(result["tracked_path"], "rb") as handle:
             download_right.download_button(
@@ -1407,6 +1451,7 @@ if run and can_run:
                 handle.read(),
                 "formatted_tracked.docx",
                 width="stretch",
+                on_click="ignore",
             )
         report_left, report_right = st.columns(2)
         with open(result["report_docx_path"], "rb") as handle:
@@ -1415,6 +1460,7 @@ if run and can_run:
                 handle.read(),
                 "format-report.docx",
                 width="stretch",
+                on_click="ignore",
             )
         with open(result["report_path"], "rb") as handle:
             report_right.download_button(
@@ -1422,6 +1468,7 @@ if run and can_run:
                 handle.read(),
                 "format-report.md",
                 width="stretch",
+                on_click="ignore",
             )
         with st.expander("在页面中查看修改报告"):
             with open(result["report_path"], encoding="utf-8") as handle:
@@ -1464,32 +1511,13 @@ if run and can_run:
                 hide_index=True,
             )
 
-    source_name = "内置示例 messy.docx" if use_demo else target_file.name
-    save_run(
-        result["out_path"],
-        result["report_path"],
-        {
-            "source_name": source_name,
-            "spec_mode": "内置示例" if use_demo else ("预制规则" if spec_json_file else spec_mode),
-            "issues_count": len(result.get("issues") or []),
-        },
-    )
-
     st.markdown('<div class="section-kicker">03 / Visual compare</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-title">排版前后对比</div>', unsafe_allow_html=True)
-    try:
-        with st.spinner("正在生成前后对比图……"):
-            from core.render import render_docx_to_png
-
-            after_pages = render_docx_to_png(result["out_path"], os.path.join(out_dir, "after"))
-            before_pages = (
-                render_docx_to_png(target_path, os.path.join(out_dir, "before"))
-                if target_suffix == ".docx"
-                else []
-            )
-    except Exception as exc:
-        st.warning(f"DOCX 已正常生成，但本机暂时无法生成对比图：{exc}")
+    if compare.get("error"):
+        st.warning(f"DOCX 已正常生成，但本机暂时无法生成对比图：{compare['error']}")
     else:
+        before_pages = compare.get("before") or []
+        after_pages = compare.get("after") or []
         if before_pages:
             before_col, after_col = st.columns(2, gap="large")
             before_col.caption("排版前")
@@ -1497,7 +1525,7 @@ if run and can_run:
             for page_index in range(min(len(before_pages), len(after_pages))):
                 before_col.image(before_pages[page_index], caption=f"第 {page_index + 1} 页")
                 after_col.image(after_pages[page_index], caption=f"第 {page_index + 1} 页")
-        else:
+        elif after_pages:
             st.caption("原文件为旧格式：已在转换后执行完整预检；页面仅展示最终 DOCX 预览。")
             for page_index, page in enumerate(after_pages):
                 st.image(page, caption=f"排版后 · 第 {page_index + 1} 页", width="stretch")
@@ -1514,28 +1542,27 @@ if runs:
     )
     with st.expander(f"查看历史任务（{len(runs)}）", expanded=False):
         for record in runs:
-            columns = st.columns([4.2, 1.4, 1.5, 1.5], vertical_alignment="center")
+            columns = st.columns(
+                [3.4, 1.1, 1.3, 1.3, 1.3, 1.3], vertical_alignment="center"
+            )
             columns[0].markdown(
                 f"**{_escape(record.get('source_name', '未命名文档'))}**  \n"
                 f"<span style='color:#7f8ba1;font-size:12px'>{_escape(record.get('time', ''))}</span>",
                 unsafe_allow_html=True,
             )
             columns[1].caption(record.get("spec_mode", ""))
-            with open(record["docx"], "rb") as handle:
-                columns[2].download_button(
-                    "DOCX",
-                    handle.read(),
-                    file_name=f"formatted_{record['run_id']}.docx",
-                    key="history-docx-" + record["run_id"],
-                    width="stretch",
-                )
-            if os.path.isfile(record["report"]):
-                with open(record["report"], "rb") as handle:
-                    columns[3].download_button(
-                        "报告",
-                        handle.read(),
-                        file_name=f"report_{record['run_id']}.md",
-                        key="history-report-" + record["run_id"],
-                        width="stretch",
-                    )
+            # 四件套逐个降级：只有文件真实存在才打开并给下载按钮，旧记录缺文件时显示“不可用”。
+            for column, entry in zip(columns[2:], deliverable_entries(record)):
+                if entry["available"]:
+                    with open(entry["path"], "rb") as handle:
+                        column.download_button(
+                            entry["label"],
+                            handle.read(),
+                            file_name=entry["file_name"],
+                            key=f"history-{entry['key']}-{record['run_id']}",
+                            width="stretch",
+                            on_click="ignore",
+                        )
+                else:
+                    column.caption(entry["missing"])
             st.divider()
