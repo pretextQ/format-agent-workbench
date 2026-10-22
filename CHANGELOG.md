@@ -2,9 +2,31 @@
 
 ## Unreleased
 
+### 中文
+
 - 改为仅从源码在本机运行，移除 Windows 便携包打包脚本、EXE 入口与自动发布流程。
 - 更新本地启动说明，Streamlit 默认只监听 `127.0.0.1`。
+- 修复自动编号替换手工编号前缀（如「一、」「1.」）时文本一致性校验误判并中断排版的问题；现在只接受实际被自动编号替换的完整前缀，其余文字改动仍会硬失败。
+- 修复修订模式 DOCX 对原本没有直接格式的段落/run 不写修订标记的问题；现在补写完整的旧状态 `w:pPrChange`/`w:rPrChange`，并避免手工前缀拆分出的 run 错配旧格式。
+- 修复视觉自动修复把倍数行距（`type: multiple`）当成磅值的问题；倍数仅接受 1.0–5.0 倍（如 1.5 倍可修），28 等异常值拒绝自动修复，`exact` 行距仍按磅处理，schema 同步校验倍数范围。
+- 修复结果页下载交付物触发页面重跑、结果区消失的问题；四件套下载不再重跑任务，结果在本次会话内保持。
+- 历史记录归档四件套交付物；旧记录只有两份时仍可查看和下载已有文件，缺失项明确显示为不可用。
+- 视觉复核状态改为明确区分“未运行 / 通过 / 失败 / 未完成”并显示原因；只有真正通过时才显示 0 个视觉问题。渲染器探测不再仅凭 pywin32 可导入判定可用，改为检查 Word/WPS COM 注册，且页面加载不会启动 Office。
+- 将 3 个测试文件中在 import 阶段执行的断言纳入 pytest 收集；测试总数由 82 增至 134，`test_outline` 不再写入仓库 `out/`。
 - 以下历史记录描述上游旧版本，便携包功能已不适用于当前版本。
+
+### English
+
+- Switched to source-only local operation and removed the Windows portable packaging scripts, EXE entry point, and automated release workflow.
+- Updated local startup guidance; Streamlit now listens on `127.0.0.1` by default.
+- Fixed text-integrity checks failing when automatic numbering replaces manually typed prefixes such as "一、" or "1."; only the exact prefixes actually stripped by the numbering pipeline are accepted, and other text changes still fail hard.
+- Fixed tracked-changes DOCX omitting revision markers for paragraphs/runs without direct formatting; complete old-state `w:pPrChange`/`w:rPrChange` snapshots are now written, without mis-assigning snapshots to runs split by manual-prefix handling.
+- Fixed visual auto-repair treating multiple line spacing (`type: multiple`) as point values; multiples are limited to 1.0–5.0 (e.g. 1.5× is fixable, 28 is rejected), `exact` spacing remains in points, and schema validation enforces the multiple range.
+- Fixed result downloads re-running the page and hiding the result area; the four deliverables no longer trigger a rerun and stay available for the session.
+- History now archives all four deliverables; older records with only two files remain viewable/downloadable, with missing items clearly marked unavailable.
+- Visual verification now reports "not run / passed / failed / incomplete" with a reason, and only a genuine pass shows zero visual issues. Renderer detection no longer treats an importable pywin32 as sufficient; it checks Word/WPS COM registration without launching Office on page load.
+- Moved import-time assertions from three test files into pytest-collected tests; the suite grows from 82 to 134 tests, and `test_outline` no longer writes into the repository `out/`.
+- The historical notes below describe upstream versions; portable-package features no longer apply to the current version.
 
 ## 0.3.0 — 2026-09-03
 
