@@ -14,7 +14,7 @@ from datetime import datetime
 
 import streamlit as st
 
-from core.agent import Agent
+from core.agent import Agent, describe_verification
 from core.history import deliverable_entries, list_runs, save_run
 from core.llm import load_dotenv
 from core.llm import LLMClient
@@ -1086,6 +1086,11 @@ if not _llm_available():
 if not renderer_status["available"]:
     st.info("没有检测到可用的渲染器（依次尝试 Microsoft Word、WPS、LibreOffice）："
             "DOCX 仍可生成，但前后对比和视觉复核将不可用。")
+elif not renderer_status.get("confirmed", True):
+    st.caption(
+        f"渲染器提示：已检测到 {renderer_status.get('name', 'Office COM')} 注册"
+        "（页面加载不会启动 Office）；实际渲染时若不可用会自动回退 LibreOffice。"
+    )
 
 
 # ---------------- 输入任务 ----------------
@@ -1426,11 +1431,24 @@ if _last_result:
         unsafe_allow_html=True,
     )
 
+    verification = describe_verification(
+        result.get("verification_status"),
+        result.get("verification_error"),
+        result.get("issues") or [],
+    )
     summary_cols = st.columns(4)
     summary_cols[0].metric("解析段落", len(result["paragraphs"]))
     summary_cols[1].metric("已处理段落", len(result["changelog"]))
     summary_cols[2].metric("命名样式", len(result["stylemap"]))
-    summary_cols[3].metric("视觉问题", len([i for i in result["issues"] if not i.get("pass")]))
+    summary_cols[3].metric("视觉问题", verification["metric"])
+    if verification["tone"] == "success":
+        st.success(verification["message"])
+    elif verification["tone"] == "error":
+        st.error(verification["message"])
+    elif verification["tone"] == "warning":
+        st.warning(verification["message"])
+    else:
+        st.info(verification["message"])
 
     result_tab, summary_tab, technical_tab = st.tabs(["下载结果", "处理摘要", "技术详情"])
     with result_tab:

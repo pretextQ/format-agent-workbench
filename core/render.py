@@ -211,18 +211,76 @@ def libreoffice_status():
     }
 
 
-def renderer_status():
-    """Windows 渲染器诊断：优先使用 Office COM，其次 LibreOffice。"""
+def _win32com_available():
+    """pywin32 是否可导入；这只是 COM 渲染的前提，不证明 Word 已安装。"""
     try:
         import win32com.client  # noqa: F401
-        return {"available": True, "name": "Word COM",
-                "version": "Microsoft Word (COM)", "path": None}
     except ImportError:
-        pass
+        return False
+    return True
+
+
+_OFFICE_COM_PROGIDS = ("Word.Application", "Kwps.Application", "wps.Application")
+
+
+def _word_com_progid():
+    """只查注册表，不启动 Office；返回已注册的 Word/WPS ProgID 或 None。"""
+    try:
+        import winreg
+    except ImportError:
+        return None
+    for prog_id in _OFFICE_COM_PROGIDS:
+        for subkey in (prog_id + r"\CLSID", prog_id + r"\CurVer"):
+            try:
+                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, subkey) as key:
+                    value, _ = winreg.QueryValueEx(key, "")
+            except OSError:
+                continue
+            if value:
+                return prog_id
+    return None
+
+
+def renderer_status():
+    """Windows 渲染器诊断：优先 Office COM，其次 LibreOffice。
+
+    页面加载时绝不启动 Word：Word COM 只用注册表 ProgID + pywin32 导入
+    做前置探测，因此只能标记 confirmed=False；实际渲染失败时调用方会
+    回退 LibreOffice。LibreOffice 通过 soffice --version 做有超时探测。
+    """
+    prog_id = _word_com_progid()
+    if _win32com_available() and prog_id:
+        display = "Word COM" if prog_id == "Word.Application" else "WPS COM"
+        return {
+            "available": True,
+            "name": display,
+            "version": f"{display}（COM 已注册，未启动验证）",
+            "path": None,
+            "confirmed": False,
+            "probe": f"win32com + registry:{prog_id}",
+            "prog_id": prog_id,
+        }
     lo = libreoffice_status()
-    return {"available": lo["available"], "name": "LibreOffice",
-            "version": lo["version"], "path": lo["path"],
-            "searched": lo.get("searched")}
+    if lo["available"]:
+        return {
+            "available": True,
+            "name": "LibreOffice",
+            "version": lo["version"],
+            "path": lo["path"],
+            "confirmed": True,
+            "probe": "soffice --version",
+            "searched": lo.get("searched"),
+        }
+    return {
+        "available": False,
+        "name": "未检测到可用渲染器",
+        "version": None,
+        "path": None,
+        "confirmed": False,
+        "probe": "win32com + registry:Word/WPS COM; soffice --version",
+        "searched": lo.get("searched"),
+        "reason": "未检测到已注册的 Word/WPS COM，LibreOffice 也不可用",
+    }
 
 
 def docx_to_pdf_libreoffice(docx_path, pdf_path):

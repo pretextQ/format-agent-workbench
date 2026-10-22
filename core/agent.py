@@ -19,6 +19,73 @@ from core.schema import validate_spec
 from core.style_set import style_name_for_role
 
 
+VERIFICATION_STATUSES = ("not_run", "passed", "failed", "incomplete")
+
+
+def describe_verification(status, error=None, issues=None):
+    """把视觉复核状态映射成 UI 文案（纯函数，便于单测）。
+
+    只有 passed 返回 metric="0"；未运行/失败/未完成都不会显示 0。
+    """
+    issue_list = [item for item in (issues or []) if isinstance(item, dict)]
+    failed = [item for item in issue_list if not item.get("pass")]
+    reason = str(error or "").strip()
+    normalized = str(status or "").strip() or "not_run"
+    if normalized not in VERIFICATION_STATUSES:
+        normalized = "incomplete"
+        reason = reason or f"未知的视觉复核状态：{status!r}"
+
+    if normalized == "passed":
+        return {
+            "status": "passed",
+            "label": "通过",
+            "tone": "success",
+            "metric": "0",
+            "problems": 0,
+            "message": f"视觉复核通过：{len(issue_list)} 项检查全部符合规范。",
+        }
+    if normalized == "failed":
+        if failed:
+            message = f"视觉复核未通过：发现 {len(failed)} 项不符合规范。"
+            if reason:
+                message += f"不符项：{reason}。"
+        else:
+            message = "视觉复核未通过：渲染或模型环节失败，没有得到可靠的检查结论。"
+            if reason:
+                message += f"原因：{reason}"
+        return {
+            "status": "failed",
+            "label": "未通过",
+            "tone": "error",
+            "metric": f"{len(failed)} 项" if failed else "失败",
+            "problems": len(failed),
+            "message": message,
+        }
+    if normalized == "incomplete":
+        message = "视觉复核未完成，没有得到可靠的检查结论。"
+        if reason:
+            message += f"原因：{reason}"
+        return {
+            "status": "incomplete",
+            "label": "未完成",
+            "tone": "warning",
+            "metric": "未完成",
+            "problems": len(failed),
+            "message": message,
+        }
+    return {
+        "status": "not_run",
+        "label": "未运行",
+        "tone": "info",
+        "metric": "未运行",
+        "problems": 0,
+        "message": (
+            "本次未运行视觉复核（未勾选）；排版结果没有做渲染质检，"
+            "不能据此认为视觉问题为 0。"
+        ),
+    }
+
+
 class Agent:
     """任务式排版 Agent：给它格式来源 + 目标文档，它自主完成理解→执行→自检。"""
 
@@ -334,6 +401,8 @@ class Agent:
         # ⑤ 视觉自检（可选，一轮定向修复，不做开放循环）
         # 注意：自检是加分项，失败（如模型不支持图片）不能拖垮已完成的排版结果。
         issues, applied = [], []
+        verification_status = "not_run"
+        verification_error = None
         if verify:
             repair_transaction = None
             try:
@@ -345,9 +414,17 @@ class Agent:
                     on_event=lambda message: self._emit(
                         "视觉自检", message, status="warn"))
                 failed = [i for i in issues if not i["pass"]]
-                if not failed:
+                if not issues:
+                    verification_status = "incomplete"
+                    verification_error = "视觉模型没有返回任何检查项，无法确认是否通过"
+                    self._emit("视觉自检", verification_error, status="err")
+                elif not failed:
+                    verification_status = "passed"
                     self._emit("视觉自检", f"自检通过：{len(issues)} 项检查全部符合规范", status="ok")
                 else:
+                    verification_status = "failed"
+                    verification_error = "、".join(
+                        f"{i['role']}.{i['field']}" for i in failed)
                     self._emit("视觉自检",
                                f"发现 {len(failed)} 项不符："
                                + "、".join(f"{i['role']}.{i['field']}" for i in failed),
@@ -400,6 +477,9 @@ class Agent:
                         spec, applied = repaired_spec, repaired_fixes
                         changelog, integrity = repaired_changelog, repaired_integrity
                         field_refresh = repaired_field_refresh
+                        verification_error = (
+                            (verification_error or "")
+                            + f"；已定向修复 {len(repaired_fixes)} 项，未重新渲染复核")
                     else:
                         self._emit("视觉自检",
                                    "这些问题无法安全自动修复，已保留在问题清单中供人工处理",
@@ -423,6 +503,11 @@ class Agent:
                     detail = f"模型无法下结论：{e}"
                 else:
                     detail = f"未预期错误：{e}"
+                if isinstance(e, VisualInconclusiveError):
+                    verification_status = "incomplete"
+                else:
+                    verification_status = "failed"
+                verification_error = detail
                 self._emit(
                     "视觉自检",
                     f"自检未完成（{detail}）。候选排版稿仍将按结构校验结果提交，"
@@ -448,4 +533,6 @@ class Agent:
             "input_conversion": _conversion_context,
             "out_path": out_path, "report_path": report_path,
             "report_docx_path": report_docx_path, "tracked_path": tracked_path,
+            "verification_status": verification_status,
+            "verification_error": verification_error,
         }
