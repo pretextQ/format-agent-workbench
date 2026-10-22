@@ -73,10 +73,52 @@ def replace_with_retry(source, destination, attempts=10):
             time.sleep(min(0.25, 0.05 * (attempt + 1)))
 
 
+def _read_bytes(path):
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
 def commit_atomic(pairs):
-    """逐个原子替换；调用方应把主 DOCX 放最后，使它成为完成标志。"""
-    for temp_path, final_path in pairs:
-        replace_with_retry(temp_path, final_path)
+    """逐个原子替换，整组事务化：任一步失败则整组回滚。
+
+    调用方应把主 DOCX 放最后，使它成为完成标志（顺序不变）。
+
+    审计 R-12/B6：旧实现在第 k 个替换失败时，前 k-1 个目标已经是新内容、
+    其余还是旧内容（半新半旧），且临时文件可能残留。现在提交前把每个目标
+    的旧内容读入**内存**作为回滚记录（不落任何副本文件，天然不污染仓库
+    与 out/）；任一步失败时按记录恢复已替换的目标、清理全部临时文件，
+    并把原始异常原样抛出；成功路径行为与顺序不变。
+    """
+    backups = {}
+    try:
+        for _, final_path in pairs:
+            backups[final_path] = (
+                _read_bytes(final_path) if os.path.exists(final_path) else None)
+    except OSError:
+        # 快照失败发生在任何替换之前：旧产物原样，只需清掉临时件。
+        cleanup_temps([temp_path for temp_path, _ in pairs])
+        raise
+
+    replaced = []
+    try:
+        for temp_path, final_path in pairs:
+            replace_with_retry(temp_path, final_path)
+            replaced.append(final_path)
+    except Exception:
+        # 逆序恢复已替换的目标为旧字节；逐个尽力而为，绝不遮蔽原始异常。
+        for final_path in reversed(replaced):
+            try:
+                old = backups[final_path]
+                if old is None:
+                    # 提交前该目标不存在：恢复“不存在”的原状态
+                    os.remove(final_path)
+                else:
+                    with open(final_path, "wb") as handle:
+                        handle.write(old)
+            except OSError:
+                pass
+        cleanup_temps([temp_path for temp_path, _ in pairs])
+        raise
 
 
 class AtomicOutputSet:
@@ -95,6 +137,8 @@ class AtomicOutputSet:
         return self.temp_paths[key]
 
     def commit(self, main_key="out_path"):
+        """按主产物最后的顺序整组提交；失败时 commit_atomic 负责整组回滚
+        （旧产物字节不变、无临时残留、原异常原样抛出），本对象不 detach。"""
         order = [key for key in self.final_paths if key != main_key] + [main_key]
         commit_atomic([
             (self.temp_paths[key], self.final_paths[key]) for key in order
